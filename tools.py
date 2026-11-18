@@ -89,3 +89,31 @@ def check_star_structure(answer: str) -> dict:
         "missing": missing,
         "all_present": not missing,
     }
+
+
+def score_relevance(answer: str, expected_keywords: list) -> dict:
+    """Score how many expected concepts appear in the candidate's answer."""
+    text = answer.lower()
+
+    covered = [
+        keyword
+        for keyword in expected_keywords
+        if keyword.lower() in text
+    ]
+
+    missed = [
+        keyword
+        for keyword in expected_keywords
+        if keyword.lower() not in text
+    ]
+
+    if expected_keywords:
+        score = round(100 * len(covered) / len(expected_keywords))
+    else:
+        score = 0
+
+    return {
+        "score": score,
+        "covered": covered,
+        "missed": missed,
+    }
