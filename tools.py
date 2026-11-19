@@ -117,3 +117,4 @@ def score_relevance(answer: str, expected_keywords: list) -> dict:
         "covered": covered,
         "missed": missed,
     }
+
