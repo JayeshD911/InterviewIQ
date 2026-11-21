@@ -23,11 +23,7 @@ expected_keywords = [
     "team",
 ]
 
-# def run_evaluation(question: str, answer: str, expected_keywords: list) -> str:
-#     return run_turn(question, answer, expected_keywords)
 
-
-# New executable entry point; the earlier setup above is retained for reference.
 from agent import session_log
 
 

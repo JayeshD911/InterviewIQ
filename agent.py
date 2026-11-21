@@ -67,22 +67,35 @@ TOOLS_SCHEMA = [
             },
         },
     },
+    {
+    "type": "function",
+    "function": {
+        "name": "generate_final_report",
+        "description": (
+            "Aggregate every answer in the current session, including "
+            "average relevance and the weakest question."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+},
 ]
 
 SYSTEM_PROMPT = """
 You are InterviewIQ, an encouraging mock-interview coach.
 
-For every candidate answer, you must call all three tools:
-1. detect_filler_words
-2. check_star_structure
-3. score_relevance
+For every candidate answer:
+1. Call detect_filler_words.
+2. Call check_star_structure.
+3. Call score_relevance.
 
-After receiving the tool results:
-- Report the exact relevance score out of 100.
-- Mention covered and missed concepts.
-- Mention filler-word findings.
-- Mention missing STAR stages when applicable.
-- Keep the feedback short, specific, and encouraging.
+If the candidate asks how they are doing, asks for their weakest area,
+or requests an overall report, call generate_final_report and answer
+using the complete session data.
+
+Keep feedback short, specific, and encouraging.
 """
 
 
@@ -98,11 +111,79 @@ TOOL_FUNCTIONS = {
         arguments["answer"],
         arguments["expected_keywords"],
     ),
+    "generate_final_report": lambda arguments: generate_final_report(),
 }
 
 
 MAX_TOOL_ROUNDS = 5
 session_log = []
+
+
+def generate_final_report():
+    if not session_log:
+        return "No answers have been scored yet."
+
+    relevance_scores = []
+    total_fillers = 0
+    lines = [f"Interview Report - {len(session_log)} question(s) answered"]
+
+    for index, entry in enumerate(session_log, 1):
+        results = entry["results"]
+
+        lines.append(f"\nQ{index}: {entry['question']}")
+
+        filler = results.get("detect_filler_words")
+
+        if filler:
+            total_fillers += filler["total"]
+            lines.append(
+                f"- Fillers: {filler['total']} ({filler['verdict']})"
+            )
+
+        star = results.get("check_star_structure")
+
+        if star:
+            if star["all_present"]:
+                lines.append("- STAR: all stages present")
+            else:
+                lines.append(
+                    "- STAR: missing "
+                    + ", ".join(star["missing"])
+                )
+
+        relevance = results.get("score_relevance")
+
+        if relevance:
+            score = relevance["score"]
+            missed = relevance["missed"] or ["none"]
+
+            relevance_scores.append((score, entry["question"]))
+
+            lines.append(f"- Relevance: {score}/100")
+            lines.append(f"- Missed concepts: {', '.join(missed)}")
+
+    if relevance_scores:
+        average = round(
+            sum(score for score, _ in relevance_scores)
+            / len(relevance_scores)
+        )
+
+        weakest_score, weakest_question = min(
+            relevance_scores,
+            key=lambda item: item[0],
+        )
+
+        lines.append(f"\nAverage relevance: {average}/100")
+        lines.append(
+            f"Weakest area: \"{weakest_question}\" "
+            f"(relevance {weakest_score}/100)"
+        )
+
+    lines.append(
+        f"Total filler words across the session: {total_fillers}"
+    )
+
+    return "\n".join(lines)
 
 
 def run_turn(question: str, answer: str, expected_keywords: list) -> str:
@@ -174,3 +255,56 @@ def run_turn(question: str, answer: str, expected_keywords: list) -> str:
     })
 
     return feedback
+
+def ask_agent(message: str) -> str:
+    messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+        },
+        {
+            "role": "user",
+            "content": message,
+        },
+    ]
+
+    for _ in range(MAX_TOOL_ROUNDS):
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            tools=TOOLS_SCHEMA,
+            tool_choice="auto",
+        )
+
+        model_message = response.choices[0].message
+
+        if not model_message.tool_calls:
+            return model_message.content
+
+        messages.append(model_message)
+
+        for tool_call in model_message.tool_calls:
+            arguments = (
+                json.loads(tool_call.function.arguments)
+                if tool_call.function.arguments
+                else {}
+            )
+
+            function_name = tool_call.function.name
+            result = TOOL_FUNCTIONS[function_name](arguments)
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": (
+                    result
+                    if isinstance(result, str)
+                    else json.dumps(result)
+                ),
+            })
+
+    return "I could not complete the session summary."
+
+
+def ask_for_final_report():
+    return generate_final_report()
